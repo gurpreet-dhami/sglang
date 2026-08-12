@@ -1071,6 +1071,36 @@ def apply_qk_norm_rope(
         return q, k
 
     if (
+        fused_enabled
+        and current_platform.is_rocm()
+        and allow_inplace
+        and (q_eps == k_eps)
+        and q.dtype in (torch.float16, torch.bfloat16)
+        and k.dtype == q.dtype
+        and q_norm.weight.dtype == q.dtype
+        and k_norm.weight.dtype == k.dtype
+        and q_has_supported_layout
+        and k_has_supported_layout
+    ):
+        try:
+            import aiter
+
+            num_tokens = batch_size * seq_len
+            cos_sin = cos_sin_cache[position_offset:position_offset + seq_len]
+            if batch_size > 1:
+                cos_sin = cos_sin.repeat(batch_size, 1)
+            q_view = q.view(1, num_tokens, q.shape[-2], head_dim)
+            k_view = k.view(1, num_tokens, k.shape[-2], head_dim)
+            aiter.fused_qk_norm_rope_1way(
+                q_view, k_view, q_norm.weight, k_norm.weight, cos_sin,
+                1, num_tokens, q.shape[-2], k.shape[-2], head_dim,
+                not is_neox, q_eps, q_view, k_view,
+            )
+            return q, k
+        except Exception:
+            pass
+
+    if (
         _is_xpu
         and allow_inplace
         and (q_eps == k_eps)
